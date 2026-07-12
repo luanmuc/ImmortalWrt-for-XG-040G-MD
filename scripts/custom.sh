@@ -14,12 +14,13 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 echo -e "${BLUE}===> 开始安装自定义插件...${NC}"
 echo -e "${BLUE}---> 当前工作目录：$(pwd)${NC}"
+
 # 带重试的git克隆函数
 git_clone_with_retry() {
     local max_retries=3
     local retry_delay=5
     local attempt=1
-    local target_dir="${*: -1}"
+    local target_dir="${@: -1}"
     while [ $attempt -le $max_retries ]; do
         echo -e "${YELLOW}---> 克隆尝试 $attempt/$max_retries${NC}"
         # 每次克隆前清理不完整目录，避免目录已存在导致克隆失败
@@ -37,6 +38,7 @@ git_clone_with_retry() {
     echo -e "${RED}---> 克隆失败，已重试$max_retries次${NC}"
     return 1
 }
+
 # 第三方插件安装函数
 UPDATE_PACKAGE() {
     local PKG_NAME=$1
@@ -45,15 +47,29 @@ UPDATE_PACKAGE() {
     echo -e "${YELLOW}---> 安装插件：${PKG_NAME}${NC}"
     
     # 删除feeds中已存在的同名包，避免冲突
+    # 1. 删除feeds源码目录中的同名包
     local FOUND_DIRS
     FOUND_DIRS=$(find ../feeds/luci/ ../feeds/packages/ -maxdepth 3 -type d -iname "*$PKG_NAME*" 2>/dev/null || true)
     if [ -n "$FOUND_DIRS" ]; then
+        # 非空时才执行循环，避免空输入导致read返回EOF触发set -e退出
         while read -r DIR; do
             if [ -n "$DIR" ]; then
                 rm -rf "$DIR"
-                echo -e "${YELLOW}---> 删除feeds中已有的同名包：$DIR${NC}"
+                echo -e "${YELLOW}---> 删除feeds源码中的同名包：$DIR${NC}"
             fi
-        done <<< "$FOUND_DIRS"
+        done <<< "$FOUND_DIRS" || true
+    fi
+    
+    # 2. 删除package/feeds/中已安装的同名软链接（避免死链接和重复包）
+    local FOUND_LINKS
+    FOUND_LINKS=$(find feeds/ -maxdepth 3 -type l -iname "*$PKG_NAME*" 2>/dev/null || true)
+    if [ -n "$FOUND_LINKS" ]; then
+        while read -r LINK; do
+            if [ -n "$LINK" ]; then
+                rm -f "$LINK"
+                echo -e "${YELLOW}---> 删除feeds软链接：$LINK${NC}"
+            fi
+        done <<< "$FOUND_LINKS" || true
     fi
     
     # 删除本地已存在的目录
@@ -69,6 +85,7 @@ UPDATE_PACKAGE() {
     
     echo -e "${GREEN}---> ${PKG_NAME} 安装成功${NC}"
 }
+
 #=================================================
 # 1. 克隆第三方插件
 #=================================================
@@ -78,18 +95,26 @@ UPDATE_PACKAGE "luci-theme-argon" "jerrykuku/luci-theme-argon" "master"
 UPDATE_PACKAGE "luci-app-argon-config" "jerrykuku/luci-app-argon-config" "master"
 # NPU 图形化管理界面（官方NPU驱动已正常工作，此为管理界面）
 UPDATE_PACKAGE "luci-app-airoha-npu" "oyk470p/luci-app-airoha-npu" "main"
+
 #=================================================
-# 2. 修复NPU插件Makefile路径问题
+# 2. 批量修复所有LuCI插件Makefile路径问题
 #=================================================
-echo -e "${YELLOW}---> 修复NPU插件Makefile路径${NC}"
-NPU_MAKEFILE="luci-app-airoha-npu/Makefile"
-if [ -f "$NPU_MAKEFILE" ]; then
-    # 插件默认写的../../luci.mk，但它在package/目录下，正确使用TOPDIR绝对路径
-    sed -i 's|../../luci.mk|$(TOPDIR)/feeds/luci/luci.mk|g' "$NPU_MAKEFILE"
-    echo -e "${GREEN}---> NPU Makefile路径修复成功${NC}"
-else
-    echo -e "${RED}---> NPU Makefile不存在，跳过修复${NC}"
-fi
+echo -e "${YELLOW}---> 批量修复所有LuCI插件Makefile路径${NC}"
+# 查找当前package目录下所有Makefile，修复LuCI插件的相对路径问题
+# 所有克隆到package/目录的LuCI插件，默认的../../luci.mk路径都不正确
+FIXED_COUNT=0
+for makefile in */Makefile; do
+    if [ -f "$makefile" ]; then
+        if grep -q "../../luci.mk" "$makefile" 2>/dev/null; then
+            # 替换相对路径为TOPDIR绝对路径，适用于所有LuCI插件
+            sed -i 's|../../luci.mk|$(TOPDIR)/feeds/luci/luci.mk|g' "$makefile"
+            echo -e "${GREEN}---> 已修复: $makefile${NC}"
+            FIXED_COUNT=$((FIXED_COUNT + 1))
+        fi
+    fi
+done
+echo -e "${GREEN}---> 共修复 $FIXED_COUNT 个LuCI插件的Makefile路径${NC}"
+
 #=================================================
 # 3. 补充cpufreq的reg属性（安全补丁，不修改其他内容）
 # 解决U-Boot不支持SMCC调用时，NPU插件CPU频率显示N/A的问题
@@ -113,6 +138,7 @@ if [ -f "$CPUFREQ_DTS" ]; then
 else
     echo -e "${YELLOW}---> 未找到cpufreq设备树文件，跳过补丁${NC}"
 fi
+
 #=================================================
 # 4. 设置Argon为默认主题
 #=================================================
@@ -120,16 +146,12 @@ echo -e "${YELLOW}---> 设置Argon为默认主题${NC}"
 # 修改LuCI默认主题（../feeds/是openwrt/feeds/）
 COLLECTION_MAKEFILES=$(find ../feeds/luci/collections/ -type f -name "Makefile" 2>/dev/null || true)
 if [ -n "$COLLECTION_MAKEFILES" ]; then
-    # 使用while read循环安全处理多个文件，避免空变量导致sed挂起
-    while read -r makefile; do
-        if [ -f "$makefile" ]; then
-            sed -i "s/luci-theme-bootstrap/luci-theme-argon/g" "$makefile"
-        fi
-    done <<< "$COLLECTION_MAKEFILES"
+    sed -i "s/luci-theme-bootstrap/luci-theme-argon/g" "$COLLECTION_MAKEFILES"
     echo -e "${GREEN}---> 默认主题设置完成${NC}"
 else
     echo -e "${YELLOW}---> 未找到LuCI集合Makefile，跳过默认主题设置${NC}"
 fi
+
 #=================================================
 # 5. 登录页设备名称横幅
 #=================================================
@@ -160,5 +182,6 @@ CSS_EOF
 else
     echo -e "${YELLOW}---> 登录页横幅已存在，跳过${NC}"
 fi
+
 echo -e "${BLUE}===> 所有自定义插件安装完成！${NC}"
 echo -e "${GREEN}===> 硬件驱动、NPU支持官方已内置，cpufreq补丁已安全添加${NC}"
