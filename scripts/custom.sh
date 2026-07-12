@@ -14,13 +14,12 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 echo -e "${BLUE}===> 开始安装自定义插件...${NC}"
 echo -e "${BLUE}---> 当前工作目录：$(pwd)${NC}"
-
 # 带重试的git克隆函数
 git_clone_with_retry() {
     local max_retries=3
     local retry_delay=5
     local attempt=1
-    local target_dir="${@: -1}"
+    local target_dir="${*: -1}"
     while [ $attempt -le $max_retries ]; do
         echo -e "${YELLOW}---> 克隆尝试 $attempt/$max_retries${NC}"
         # 每次克隆前清理不完整目录，避免目录已存在导致克隆失败
@@ -38,7 +37,6 @@ git_clone_with_retry() {
     echo -e "${RED}---> 克隆失败，已重试$max_retries次${NC}"
     return 1
 }
-
 # 第三方插件安装函数
 UPDATE_PACKAGE() {
     local PKG_NAME=$1
@@ -71,7 +69,6 @@ UPDATE_PACKAGE() {
     
     echo -e "${GREEN}---> ${PKG_NAME} 安装成功${NC}"
 }
-
 #=================================================
 # 1. 克隆第三方插件
 #=================================================
@@ -81,7 +78,6 @@ UPDATE_PACKAGE "luci-theme-argon" "jerrykuku/luci-theme-argon" "master"
 UPDATE_PACKAGE "luci-app-argon-config" "jerrykuku/luci-app-argon-config" "master"
 # NPU 图形化管理界面（官方NPU驱动已正常工作，此为管理界面）
 UPDATE_PACKAGE "luci-app-airoha-npu" "oyk470p/luci-app-airoha-npu" "main"
-
 #=================================================
 # 2. 修复NPU插件Makefile路径问题
 #=================================================
@@ -94,7 +90,6 @@ if [ -f "$NPU_MAKEFILE" ]; then
 else
     echo -e "${RED}---> NPU Makefile不存在，跳过修复${NC}"
 fi
-
 #=================================================
 # 3. 补充cpufreq的reg属性（安全补丁，不修改其他内容）
 # 解决U-Boot不支持SMCC调用时，NPU插件CPU频率显示N/A的问题
@@ -118,7 +113,6 @@ if [ -f "$CPUFREQ_DTS" ]; then
 else
     echo -e "${YELLOW}---> 未找到cpufreq设备树文件，跳过补丁${NC}"
 fi
-
 #=================================================
 # 4. 设置Argon为默认主题
 #=================================================
@@ -126,12 +120,16 @@ echo -e "${YELLOW}---> 设置Argon为默认主题${NC}"
 # 修改LuCI默认主题（../feeds/是openwrt/feeds/）
 COLLECTION_MAKEFILES=$(find ../feeds/luci/collections/ -type f -name "Makefile" 2>/dev/null || true)
 if [ -n "$COLLECTION_MAKEFILES" ]; then
-    sed -i "s/luci-theme-bootstrap/luci-theme-argon/g" $COLLECTION_MAKEFILES
+    # 使用while read循环安全处理多个文件，避免空变量导致sed挂起
+    while read -r makefile; do
+        if [ -f "$makefile" ]; then
+            sed -i "s/luci-theme-bootstrap/luci-theme-argon/g" "$makefile"
+        fi
+    done <<< "$COLLECTION_MAKEFILES"
     echo -e "${GREEN}---> 默认主题设置完成${NC}"
 else
     echo -e "${YELLOW}---> 未找到LuCI集合Makefile，跳过默认主题设置${NC}"
 fi
-
 #=================================================
 # 5. 登录页设备名称横幅
 #=================================================
@@ -162,6 +160,5 @@ CSS_EOF
 else
     echo -e "${YELLOW}---> 登录页横幅已存在，跳过${NC}"
 fi
-
 echo -e "${BLUE}===> 所有自定义插件安装完成！${NC}"
 echo -e "${GREEN}===> 硬件驱动、NPU支持官方已内置，cpufreq补丁已安全添加${NC}"
