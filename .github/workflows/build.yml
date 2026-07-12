@@ -56,8 +56,8 @@ jobs:
           sudo chmod 600 /mnt/swapfile
           sudo mkswap /mnt/swapfile
           sudo swapon /mnt/swapfile
-          sudo sysctl vm.swappiness=10
-          echo "swap配置完成，swappiness=10"
+          sudo sysctl vm.swappiness=10 || true
+          echo "swap配置完成（swappiness设置失败不影响使用）"
           free -h
 
       - name: Install dependencies
@@ -107,11 +107,13 @@ jobs:
           echo "创建大目录软链接到/mnt分区，防止根分区空间不足..."
           sudo mkdir -p /mnt/openwrt-cache/{build_dir,staging_dir}
           sudo chown -R $USER:$USER /mnt/openwrt-cache
-          # 删除原有空目录（如果存在）
+          # 提前创建dl和ccache目录（第一次运行无缓存时不存在，避免ls报错）
+          mkdir -p dl ccache
+          # 删除原有空目录或旧软链接（如果存在）
           rm -rf build_dir staging_dir
-          # 创建软链接，编译中间目录指向/mnt分区（不缓存）
-          ln -s /mnt/openwrt-cache/build_dir build_dir
-          ln -s /mnt/openwrt-cache/staging_dir staging_dir
+          # 创建软链接，编译中间目录指向/mnt分区（不缓存），-f强制覆盖保证幂等
+          ln -sf /mnt/openwrt-cache/build_dir build_dir
+          ln -sf /mnt/openwrt-cache/staging_dir staging_dir
           echo "软链接创建完成，编译中间目录已挂载到/mnt分区"
           ls -la dl ccache build_dir staging_dir
 
@@ -175,8 +177,8 @@ jobs:
         run: |
           cd openwrt
           IMMORTALWRT_VER=$(cat version 2>/dev/null || echo "snapshot")
-          KERNEL_VER=$(grep -E "^LINUX_VERSION-\d+\.\d+" include/kernel-*.mk \
-            | head -n1 | cut -d'=' -f2 | tr -d ' ')
+          KERNEL_VER=$(grep -E "^LINUX_VERSION-\d+\.\d+" include/kernel-*.mk 2>/dev/null \
+            | head -n1 | cut -d'=' -f2 | tr -d ' ' || true)
           if [ -z "$KERNEL_VER" ]; then
             KERNEL_VER=$(make kernelversion 2>/dev/null || echo "unknown")
           fi
@@ -233,15 +235,18 @@ jobs:
           cd openwrt
           mkdir -p ../output/firmware
           OUTPUT_DIR="bin/targets/*/*"
-          if [ -d $OUTPUT_DIR ]; then
-            # 复制非UBI格式的固件文件，自动排除UBI镜像
-            find $OUTPUT_DIR -maxdepth 1 -type f \
-              ! -name "*ubi*" \
-              \( -name "*-factory.bin" -o -name "*-sysupgrade.bin" \
-                 -o -name "*-rootfs.tar.gz" -o -name "sha256sums" \
-                 -o -name "*.buildinfo" \) \
-              -exec cp -f {} ../output/firmware/ \;
-          fi
+          # 展开通配符获取实际目录
+          for dir in $OUTPUT_DIR; do
+            if [ -d "$dir" ]; then
+              # 复制非UBI格式的固件文件，自动排除UBI镜像
+              find "$dir" -maxdepth 1 -type f \
+                ! -name "*ubi*" \
+                \( -name "*-factory.bin" -o -name "*-sysupgrade.bin" \
+                   -o -name "*-rootfs.tar.gz" -o -name "sha256sums" \
+                   -o -name "*.buildinfo" \) \
+                -exec cp -f {} ../output/firmware/ \; || true
+            fi
+          done
           echo "固件文件已整理到output目录（已排除UBI格式固件）"
           ls -lh ../output/firmware/
 
