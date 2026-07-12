@@ -67,6 +67,8 @@ jobs:
       - name: Clone ImmortalWrt source
         run: |
           for i in 1 2 3; do
+            # 每次克隆前清理不完整目录，避免目录已存在导致克隆失败
+            rm -rf openwrt
             git clone --depth 1 ${{ github.event.inputs.REPO_URL }} -b ${{ github.event.inputs.BRANCH }} openwrt && break
             if [ $i -eq 3 ]; then
               echo "::error::源码克隆失败，已重试3次"
