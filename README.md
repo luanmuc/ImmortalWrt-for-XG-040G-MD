@@ -1,28 +1,30 @@
-# ImmortalWrt for XG-040G-MD
-基于你自己实际编译成功的workflow优化，编译稳定好用的ImmortalWrt固件。
+# ImmortalWrt for Nokia XG-040G-MD
 
-## 说明
-- 源码：ImmortalWrt 官方 master 分支
-- 设备：Nokia XG-040G-MD（官方原生支持，无需任何补丁）
-- 默认包含：中文界面、USB/存储支持、常用工具、zram内存优化、硬件加速
-- 无多余第三方插件，需要什么自己加
+基于ImmortalWrt官方master分支，为诺基亚贝尔XG-040G-MD万兆光猫定制的云编译固件。
+
+## 特性
+- ✅ 100%基于ImmortalWrt官方源码，官方完整支持设备，无需额外补丁
+- ✅ 内核6.18，支持NPU硬件加速、2.5G电口、USB3.0
+- ✅ 内置常用插件：网页终端、UPnP、SQM智能流控、iStore应用商店
+- ✅ 内置OFA应用过滤（家长控制、上网行为管理）
+- ✅ 内置AdGuard Home广告过滤
+- ✅ 内置DDNSTO简单内网穿透
+- ✅ 内置HomeProxy科学上网
+- ✅ Argon精美主题，默认中文界面
+- ✅ NPU图形化管理界面，显示CPU频率、硬件加速状态
+- ✅ 内置dllkids第三方软件源，插件更新更快
+- ✅ 成熟云编译方案，自动缓存、自动清理空间、自动发布固件
 
 ## 使用方法
-1. 将所有文件上传到GitHub仓库根目录
-2. 进入Actions页面，启用Workflows
-3. 选择 "Build ImmortalWrt for XG-040G-MD"，点击 "Run workflow" 即可开始编译
-4. 编译完成后在Releases页面下载sysupgrade.bin刷入
+1. 在GitHub新建仓库，将本仓库所有文件上传到仓库根目录
+2. 进入仓库的Actions页面，启用Workflow
+3. 手动触发"Build ImmortalWrt for XG-040G-MD"工作流
+4. 等待约2-3小时编译完成，在Releases页面下载固件
+5. 刷机：
+   - 已在ImmortalWrt/OpenWrt系统：直接在系统升级页面刷入sysupgrade.bin，第一次刷不保留配置
+   - 救砖/首次刷机：在U-Boot Web界面分别刷入factory-kernel.bin和factory-rootfs.bin
 
-## 怎么加第三方插件？
-编辑 `scripts/custom.sh`，需要什么插件就取消对应的注释就行，不用改workflow：
-- Argon主题：取消主题那几行的注释
-- HomeProxy/PassWall/OpenClash代理：取消对应插件的注释
-- 广告过滤：取消AdGuardHome的注释
-- 其他插件：照着例子加一行`UPDATE_PACKAGE "插件名" "作者/仓库" "分支"`就行
-
-脚本会自动处理依赖冲突，非常方便。
-
-## 可选编译选项
-- SSH：编译时勾选ssh选项，可以SSH连接到编译环境调试
-- Clean build：全量清理后重新编译（一般不用，缓存会加速编译）
-- Verbose log：默认开启详细编译日志，出问题方便排查
+## 注意事项
+- ❌ 绝对不要刷UBI版本固件，会变砖！本固件自动排除UBI版本
+- 第一次刷机建议不保留配置，避免旧配置冲突
+- 默认登录地址：192.168.1.1，用户名root，密码password
