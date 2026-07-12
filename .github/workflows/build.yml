@@ -1,5 +1,4 @@
 name: Build ImmortalWrt Firmware
-
 on:
   workflow_dispatch:
     inputs:
@@ -31,23 +30,29 @@ on:
         description: 额外安装的软件包
         required: false
         default: ""
-
 permissions:
   contents: write
-
 jobs:
   build:
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout current repo
         uses: actions/checkout@v4
-
       - name: Free up disk space
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
           sudo apt-get clean
           df -h
-
+      - name: Setup swap space
+        run: |
+          echo "创建2G swap分区，防止编译OOM..."
+          sudo fallocate -l 2G /mnt/swapfile
+          sudo chmod 600 /mnt/swapfile
+          sudo mkswap /mnt/swapfile
+          sudo swapon /mnt/swapfile
+          sudo sysctl vm.swappiness=10
+          echo "swap配置完成，swappiness=10"
+          free -h
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -59,7 +64,6 @@ jobs:
             p7zip p7zip-full patch pkgconf python3 python3-pyelftools python3-setuptools qemu-utils rsync scons \
             squashfs-tools subversion swig texinfo uglifyjs unzip vim wget xmlto xxd zlib1g-dev zstd
           sudo apt-get clean
-
       - name: Clone ImmortalWrt source
         run: |
           for i in 1 2 3; do
@@ -71,13 +75,25 @@ jobs:
             echo "::warning::源码克隆失败，第${i}次重试，10秒后继续..."
             sleep 10
           done
-
+      - name: Setup large directory symlinks
+        run: |
+          cd openwrt
+          echo "创建大目录软链接到/mnt分区，防止根分区空间不足..."
+          mkdir -p /mnt/openwrt-cache/{dl,ccache,build_dir,staging_dir}
+          # 删除原有空目录（如果存在）
+          rm -rf dl ccache build_dir staging_dir
+          # 创建软链接，所有大目录指向/mnt分区
+          ln -s /mnt/openwrt-cache/dl dl
+          ln -s /mnt/openwrt-cache/ccache ccache
+          ln -s /mnt/openwrt-cache/build_dir build_dir
+          ln -s /mnt/openwrt-cache/staging_dir staging_dir
+          echo "软链接创建完成，大目录已挂载到/mnt分区"
+          ls -la dl ccache build_dir staging_dir
       - name: Load custom feeds
         run: |
           if [ -f ${{ github.event.inputs.FEEDS_CONF }} ]; then
             cp -f ${{ github.event.inputs.FEEDS_CONF }} openwrt/feeds.conf.default
           fi
-
       - name: Update feeds
         run: |
           cd openwrt
@@ -90,7 +106,6 @@ jobs:
             echo "::warning::Feeds更新失败，第${i}次重试，10秒后继续..."
             sleep 10
           done
-
       - name: Install feeds
         run: |
           cd openwrt
@@ -103,7 +118,19 @@ jobs:
             echo "::warning::Feeds安装失败，第${i}次重试，10秒后继续..."
             sleep 10
           done
-
+      - name: Copy custom files
+        run: |
+          if [ -d files ]; then
+            cp -rf files openwrt/
+            echo "已复制自定义files目录到源码根目录，文件将打包进固件"
+          fi
+      - name: Run custom build script
+        run: |
+          cd openwrt/package
+          echo "执行自定义脚本，工作目录：$(pwd)（插件将克隆到package目录）"
+          chmod +x ../../scripts/custom.sh
+          ../../scripts/custom.sh
+          echo "自定义脚本执行完成，第三方插件已安装、CPUFreq补丁已应用"
       - name: Load custom configuration
         run: |
           cd openwrt
@@ -111,14 +138,6 @@ jobs:
             cp -f ../${{ github.event.inputs.CONFIG_FILE }} .config
           fi
           make defconfig
-
-      - name: Copy custom files
-        run: |
-          if [ -d files ]; then
-            cp -rf files openwrt/
-            echo "已复制自定义文件到固件目录"
-          fi
-
       - name: Get version information
         id: versions
         run: |
@@ -131,16 +150,16 @@ jobs:
           echo "IMMORTALWRT_VER=$IMMORTALWRT_VER" >> $GITHUB_OUTPUT
           echo "KERNEL_VER=$KERNEL_VER" >> $GITHUB_OUTPUT
           echo "版本信息: ImmortalWrt $IMMORTALWRT_VER, Kernel $KERNEL_VER"
-
       - name: Enable ccache
         if: ${{ github.event.inputs.ENABLE_CCACHE == 'true' }}
         run: |
           cd openwrt
+          echo "启用ccache，缓存目录：$(pwd)/ccache（挂载在/mnt分区）"
           echo "CONFIG_CCACHE=y" >> .config
-          echo "CONFIG_CCACHE_DIR=\"$HOME/.ccache\"" >> .config
+          echo "CONFIG_CCACHE_DIR=\"$(pwd)/ccache\"" >> .config
           ccache -M 20G
+          ccache -z
           make defconfig
-
       - name: Install extra packages
         if: ${{ github.event.inputs.EXTRA_PACKAGES != '' }}
         run: |
@@ -150,7 +169,6 @@ jobs:
             echo "CONFIG_PACKAGE_$pkg=y" >> .config
           done
           make defconfig
-
       - name: Download packages
         run: |
           cd openwrt
@@ -163,34 +181,29 @@ jobs:
             echo "::warning::软件包下载失败，第${i}次重试，10秒后继续..."
             sleep 10
           done
-
       - name: Compile firmware
         run: |
           cd openwrt
-          echo "开始编译，详细日志已开启"
+          echo "开始编译，已开启V=s详细日志"
           make -j$(nproc) V=s || {
-            echo "::error::编译失败，尝试单线程重编"
+            echo "::error::多线程编译失败，尝试单线程重编..."
             make -j1 V=s
             exit $?
           }
-
       - name: Organize output files
         run: |
           cd openwrt
           mkdir -p ../output/firmware
           OUTPUT_DIR="bin/targets/*/*"
           if [ -d $OUTPUT_DIR ]; then
-            cp -f $OUTPUT_DIR/*-factory.bin ../output/firmware/ 2>/dev/null || true
-            cp -f $OUTPUT_DIR/*-sysupgrade.bin ../output/firmware/ 2>/dev/null || true
-            cp -f $OUTPUT_DIR/*-rootfs.tar.gz ../output/firmware/ 2>/dev/null || true
-            cp -f $OUTPUT_DIR/sha256sums ../output/firmware/ 2>/dev/null || true
-            cp -f $OUTPUT_DIR/config.buildinfo ../output/firmware/ 2>/dev/null || true
-            cp -f $OUTPUT_DIR/feeds.buildinfo ../output/firmware/ 2>/dev/null || true
-            cp -f $OUTPUT_DIR/version.buildinfo ../output/firmware/ 2>/dev/null || true
+            # 复制非UBI格式的固件文件，自动排除UBI镜像
+            find $OUTPUT_DIR -maxdepth 1 -type f \
+              ! -name "*ubi*" \
+              \( -name "*-factory.bin" -o -name "*-sysupgrade.bin" -o -name "*-rootfs.tar.gz" -o -name "sha256sums" -o -name "*.buildinfo" \) \
+              -exec cp -f {} ../output/firmware/ \;
           fi
-          echo "固件文件已整理到output目录"
+          echo "固件文件已整理到output目录（已排除UBI格式固件）"
           ls -lh ../output/firmware/
-
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
