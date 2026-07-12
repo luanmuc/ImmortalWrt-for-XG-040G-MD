@@ -70,13 +70,14 @@ jobs:
         cd $OPENWRT_PATH
         sudo mkdir -p /mnt/openwrt
         for dir in build_dir dl staging_dir tmp; do
-          if [ -d "$dir" ]; then
-            sudo cp -a "$dir" /mnt/openwrt/
+          sudo mkdir -p /mnt/openwrt/"$dir"
+          if [ -d "$dir" ] && [ "$(ls -A "$dir")" ]; then
+            sudo cp -a "$dir"/* /mnt/openwrt/"$dir"/ 2>/dev/null || true
             sudo rm -rf "$dir"
           fi
           sudo ln -sf /mnt/openwrt/"$dir" "$dir"
         done
-        sudo chown -R runner:docker /mnt/openwrt
+        sudo chown -R runner:runner /mnt/openwrt
 
     - name: Load custom feeds
       run: |
@@ -99,28 +100,36 @@ jobs:
         make defconfig
 
     - name: Download packages
-      run: |
-        cd $OPENWRT_PATH
-        make download -j$(nproc)
-      retry: 3
+      uses: nick-fields/retry@v3
+      with:
+        max_attempts: 3
+        retry_wait_seconds: 10
+        timeout_minutes: 30
+        command: |
+          cd $OPENWRT_PATH
+          make download -j$(nproc)
 
     - name: Ccache cache
       uses: actions/cache@v3
       with:
-        path: .ccache
+        path: ${{ github.workspace }}/.ccache
         key: ccache-immortalwrt-${{ github.sha }}
         restore-keys: |
           ccache-immortalwrt-
 
     - name: Compile firmware
-      run: |
-        cd $OPENWRT_PATH
-        echo "start compile"
-        export CCACHE_DIR=$GITHUB_WORKSPACE/.ccache
-        export CCACHE_COMPILERCHECK=content
-        ccache -M 2G
-        make -j$(nproc) || make -j1 V=s
-      retry: 3
+      uses: nick-fields/retry@v3
+      with:
+        max_attempts: 3
+        retry_wait_seconds: 30
+        timeout_minutes: 180
+        command: |
+          cd $OPENWRT_PATH
+          echo "start compile"
+          export CCACHE_DIR=$GITHUB_WORKSPACE/.ccache
+          export CCACHE_COMPILERCHECK=content
+          ccache -M 2G
+          make -j$(nproc) || make -j1 V=s
 
     - name: Organize files
       id: organize
