@@ -1,17 +1,16 @@
 name: Build ImmortalWrt for XG-040G-MD
-permissions:
-  contents: write
-  actions: write
+
 on:
+  repository_dispatch:
   workflow_dispatch:
     inputs:
       ssh:
-        description: "SSH connection to Actions for debug"
+        description: "SSH connection to debug"
         required: false
         default: false
         type: boolean
-      clean:
-        description: "Clean build"
+      clean_build:
+        description: "Clean build directory"
         required: false
         default: false
         type: boolean
@@ -20,242 +19,229 @@ on:
         required: false
         default: true
         type: boolean
-  schedule:
-    # 北京时间每天凌晨2点自动编译
-    - cron: "0 18 * * *"
   push:
     branches:
       - main
-    paths:
-      - ".github/workflows/build.yml"
-      - ".config"
-      - "feeds.conf.default"
-      - "scripts/**"
+      - master
+  schedule:
+    - cron: 0 18 * * *
+
+permissions:
+  contents: write
+  actions: write
+
 env:
-  CONFIG_FILE: ".config"
-  FEEDS_CONF: "feeds.conf.default"
+  TZ: Asia/Shanghai
   REPO_URL: https://github.com/immortalwrt/immortalwrt.git
   REPO_BRANCH: master
+  FEEDS_CONF: feeds.conf.default
+  CONFIG_FILE: .config
+  CUSTOM_SCRIPT: scripts/custom.sh
   UPLOAD_RELEASE: true
-  KEEP_RELEASES: 20
-  CCACHE_DIR: /mnt/immortalwrt/ccache
-  CCACHE_MAXSIZE: 5G
-  TZ: Asia/Shanghai
+  UPLOAD_BIN_DIR: false
+  TZ_VALUE: Asia/Shanghai
+
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
+
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+    - name: Checkout
+      uses: actions/checkout@v4
 
-      - name: Free disk space
-        uses: jlumbroso/free-disk-space@main
-        with:
-          tool-cache: true
-          android: true
-          dotnet: true
+    - name: Free up disk space
+      uses: jlumbroso/free-disk-space@main
+      with:
+        tool-cache: false
+        android: true
+        dotnet: true
+        haskell: true
+        large-packages: true
+        docker-images: true
+        swap-storage: true
 
-      - name: Space usage check
-        run: df -h
+    - name: Create swap
+      run: |
+        sudo fallocate -l 2G /swapfile
+        sudo chmod 600 /swapfile
+        sudo mkswap /swapfile
+        sudo swapon /swapfile
+        echo "/swapfile none swap defaults 0 0" | sudo tee -a /etc/fstab
+        free -h
 
-      - name: Setup environment dependencies
-        env:
-          DEBIAN_FRONTEND: noninteractive
-        run: |
-          sudo apt update
-          sudo apt purge -y python3-distutils || true
-          sudo apt autoremove -y
-          sudo apt install -y \
-            build-essential clang flex bison g++ gawk \
-            gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev \
-            python3-setuptools rsync swig unzip zlib1g-dev file wget \
-            device-tree-compiler ccache
-          sudo timedatectl set-timezone "$TZ"
+    - name: Install dependencies
+      run: |
+        sudo apt update
+        sudo apt install -y ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential \
+          bzip2 ccache clang cmake cpio curl device-tree-compiler ecj fastjar flex gawk gettext gcc-multilib \
+          g++-multilib git gnutls-dev gperf haveged help2man intltool jq lib32gcc-s1 libc6-dev-i386 libelf-dev \
+          libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5 \
+          libpython3-dev libreadline-dev libssl-dev libtool llvm lrzsz mkisofs msmtp nano ninja-build p7zip p7zip-full \
+          patch pkgconf python3 python3-pip python3-ply python3-pyelftools qemu-utils re2c rsync scons squashfs-tools \
+          subversion swig texinfo uglifyjs unzip upx-ucl vim wget xmlto xxd zlib1g-dev zstd
+        sudo pip3 install --upgrade pip
+        sudo pip3 install pygments docutils
 
-      - name: Ensure Python build tools
-        run: |
-          python3 -m pip install --upgrade pip setuptools wheel
+    - name: Cache ccache
+      uses: actions/cache@v4
+      with:
+        path: /mnt/ccache
+        key: ccache-xg-040g-md-${{ github.sha }}
+        restore-keys: |
+          ccache-xg-040g-md-
 
-      - name: Clone ImmortalWrt source code
-        run: |
-          echo "Start cloning source at: $(date)"
-          git clone --depth 1 --branch "$REPO_BRANCH" "$REPO_URL" openwrt
-          echo "Clone finished at: $(date)"
+    - name: Cache downloads
+      uses: actions/cache@v4
+      with:
+        path: /mnt/dl
+        key: dl-xg-040g-md-${{ github.sha }}
+        restore-keys: |
+          dl-xg-040g-md-
 
-      - name: Move big dirs to /mnt to solve space issue
-        run: |
-          sudo mkdir -p /mnt/immortalwrt/{dl,staging_dir,build_dir,ccache}
-          sudo chown -R "$USER:$(id -gn)" /mnt/immortalwrt
-          rm -rf openwrt/dl openwrt/staging_dir openwrt/build_dir
-          ln -sfn /mnt/immortalwrt/dl openwrt/dl
-          ln -sfn /mnt/immortalwrt/staging_dir openwrt/staging_dir
-          ln -sfn /mnt/immortalwrt/build_dir openwrt/build_dir
-          df -h
+    - name: Prepare symlinks for large directories
+      run: |
+        sudo mkdir -p /mnt/dl /mnt/ccache /mnt/build_dir /mnt/staging_dir
+        sudo chown $USER:$USER /mnt/*
+        mkdir -p openwrt
+        ln -sf /mnt/dl openwrt/dl
+        ln -sf /mnt/ccache openwrt/.ccache
+        echo "Symlinks created successfully"
 
-      - name: Restore dl cache
-        uses: actions/cache@v4
-        with:
-          path: /mnt/immortalwrt/dl
-          key: ${{ runner.os }}-immortalwrt-${{ env.REPO_BRANCH }}-dl-${{ hashFiles('.config') }}
-          restore-keys: |
-            ${{ runner.os }}-immortalwrt-${{ env.REPO_BRANCH }}-dl-
+    - name: Clone ImmortalWrt source code
+      run: |
+        git clone --depth 1 --single-branch --branch $REPO_BRANCH $REPO_URL openwrt
+        cd openwrt
+        echo "Source code version:"
+        git rev-parse --short HEAD
+        git log -1 --format="%s"
 
-      - name: Restore ccache
-        uses: actions/cache/restore@v4
-        with:
-          path: /mnt/immortalwrt/ccache
-          key: ${{ runner.os }}-immortalwrt-${{ env.REPO_BRANCH }}-ccache-v2-${{ github.run_id }}
-          restore-keys: |
-            ${{ runner.os }}-immortalwrt-${{ env.REPO_BRANCH }}-ccache-v2-
+    - name: Load custom feeds
+      run: |
+        [ -e $FEEDS_CONF ] && cp -f $FEEDS_CONF openwrt/feeds.conf.default
+        echo "Custom feeds loaded"
+        cat openwrt/feeds.conf.default
 
-      - name: Setup ccache
-        run: |
-          mkdir -p "$CCACHE_DIR"
-          ccache -M "$CCACHE_MAXSIZE"
-          echo "ccache dir: $CCACHE_DIR"
-          ccache -s
+    - name: Load custom files
+      run: |
+        [ -d files ] && cp -rf files/* openwrt/
+        echo "Custom files loaded"
 
-      - name: Update & Install feeds
-        working-directory: ./openwrt
-        run: |
-          echo "Copying feeds config..."
-          cp -fv "$GITHUB_WORKSPACE/$FEEDS_CONF" feeds.conf.default
-          echo "Start updating feeds at: $(date)"
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a -f
-          echo "Feeds installed at: $(date)"
+    - name: Update feeds
+      run: |
+        cd openwrt
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a -f
 
-      - name: Install custom third-party packages
-        working-directory: ./openwrt/package
-        run: |
-          if [ -f "$GITHUB_WORKSPACE/scripts/custom.sh" ]; then
-            chmod +x "$GITHUB_WORKSPACE/scripts/custom.sh"
-            bash "$GITHUB_WORKSPACE/scripts/custom.sh"
-          else
-            echo "No custom packages script found, skip."
+    - name: Load custom script
+      run: |
+        [ -e $CUSTOM_SCRIPT ] && chmod +x $CUSTOM_SCRIPT && cd openwrt/package && ../../$CUSTOM_SCRIPT
+        echo "Custom script executed"
+
+    - name: Load custom configuration
+      run: |
+        [ -e $CONFIG_FILE ] && cp -f $CONFIG_FILE openwrt/.config
+        cd openwrt
+        make defconfig
+        echo "Configuration loaded and defconfig done"
+
+    - name: Download packages
+      run: |
+        cd openwrt
+        make download -j4 V=s
+        echo "All packages downloaded"
+
+    - name: Start build
+      id: build
+      run: |
+        cd openwrt
+        echo "Build started at: $(date)"
+        START_TIME=$(date +%s)
+        export CCACHE_DIR=/mnt/ccache
+        export CCACHE_MAXSIZE=5G
+        export CCACHE_COMPRESS=1
+        ccache -z
+        if [ "${{ github.event.inputs.verbose }}" = "true" ] || [ "${{ github.event.inputs.verbose }}" = "" ]; then
+          make -j$(nproc) V=s || {
+            echo "Build failed!"
+            echo "==================== Disk usage ===================="
+            df -h
+            echo "==================== Last 100 lines of log ===================="
+            tail -n 100 logs/$(ls -t logs/ | head -1)
+            exit 1
+          }
+        else
+          make -j$(nproc) || {
+            echo "Build failed!"
+            df -h
+            tail -n 100 logs/$(ls -t logs/ | head -1)
+            exit 1
+          }
+        fi
+        END_TIME=$(date +%s)
+        BUILD_TIME=$((END_TIME - START_TIME))
+        echo "Build completed at: $(date)"
+        echo "Total build time: $((BUILD_TIME/60)) minutes $((BUILD_TIME%60)) seconds"
+        ccache -s
+
+    - name: Organize firmware files
+      id: organize
+      run: |
+        cd openwrt/bin/targets/airoha/an7581
+        rm -rf *ubi* *UBI*
+        DATE=$(date +"%Y.%m.%d-%H%M")
+        DEVICE="nokia_xg-040g-md"
+        mkdir -p firmware
+        for file in *; do
+          if [ -f "$file" ]; then
+            if echo "$file" | grep -q "sysupgrade"; then
+              NEW_NAME="immortalwrt-${DEVICE}-squashfs-sysupgrade-${DATE}.bin"
+            elif echo "$file" | grep -q "factory-kernel"; then
+              NEW_NAME="immortalwrt-${DEVICE}-squashfs-factory-kernel-${DATE}.bin"
+            elif echo "$file" | grep -q "factory-rootfs"; then
+              NEW_NAME="immortalwrt-${DEVICE}-squashfs-factory-rootfs-${DATE}.bin"
+            elif echo "$file" | grep -q "initramfs"; then
+              NEW_NAME="immortalwrt-${DEVICE}-initramfs-${DATE}.itb"
+            else
+              continue
+            fi
+            cp "$file" "firmware/$NEW_NAME"
+            echo "Generated: $NEW_NAME ($(du -h "$file" | cut -f1))"
           fi
+        done
+        cp ../../../.config firmware/config-${DATE}.buildinfo
+        echo "FIRMWARE_PATH=$(pwd)/firmware" >> $GITHUB_OUTPUT
+        echo "BUILD_DATE=$DATE" >> $GITHUB_OUTPUT
 
-      - name: Copy configuration and defconfig
-        run: |
-          cp -fv "${CONFIG_FILE}" openwrt/.config
-          cd openwrt
-          if [ ${{ inputs.clean }} == 'true' ]; then
-            make dirclean
-          fi
-          make defconfig
-          [ -e .config ] && cp .config defconfig-final.config
+    - name: Upload firmware to Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: ImmortalWrt-XG-040G-MD-${{ steps.organize.outputs.BUILD_DATE }}
+        path: ${{ steps.organize.outputs.FIRMWARE_PATH }}/*
+        retention-days: 7
 
-      - name: Upload build config for debug
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-config
-          path: |
-            .config
-            openwrt/defconfig-final.config
-          retention-days: 7
+    - name: Generate Release
+      if: env.UPLOAD_RELEASE == 'true' && !cancelled()
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ steps.organize.outputs.BUILD_DATE }}
+        name: ImmortalWrt for XG-040G-MD ${{ steps.organize.outputs.BUILD_DATE }}
+        body: |
+          ## ImmortalWrt for Nokia XG-040G-MD
+          - Build date: ${{ steps.organize.outputs.BUILD_DATE }}
+          - Source: ImmortalWrt official master branch
+          - Kernel: 6.18
+          - Default plugins: ttyd, UPnP, SQM, iStore, OFA AppFilter, AdGuard Home, DDNSTO, HomeProxy, Argon Theme, NPU Manager
+        files: ${{ steps.organize.outputs.FIRMWARE_PATH }}/*
 
-      - name: SSH connection for debug
-        uses: P3TERX/ssh2actions@v1.0.0
-        if: github.event.inputs.ssh == 'true'
+    - name: Cleanup old releases
+      uses: dev-drprasad/delete-older-releases@v0.3.4
+      if: env.UPLOAD_RELEASE == 'true' && !cancelled()
+      with:
+        keep_latest: 20
+        delete_tags: true
 
-      - name: Download packages
-        working-directory: ./openwrt
-        run: |
-          echo "Start downloading packages at: $(date)"
-          make download -j$(nproc)
-          find dl -size -1024c -delete
-          echo "Packages downloaded at: $(date)"
-
-      - name: Add swap space to prevent OOM
-        run: |
-          sudo fallocate -l 2G /swapfile
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
-          free -h
-
-      - name: Compile ImmortalWrt firmware
-        id: compile
-        run: |
-          cd openwrt
-          echo "Start compilation at: $(date)"
-          echo "Disk usage before compile:"
-          df -h
-          if [ ${{ inputs.verbose }} == 'true' ]; then
-            make V=s -j$(nproc) || {
-              echo "Compile failed! Last 100 lines of log:"
-              tail -n 100 build_dir/*.log 2>/dev/null || true
-              echo "Disk usage after failure:"
-              df -h
-              du -h -d1 . | sort -h | tail -n 30
-              exit 1
-            }
-          else
-            make -j$(nproc) || {
-              echo "Compile failed! Disk usage after failure:"
-              df -h
-              du -h -d1 . | sort -h | tail -n 30
-              exit 1
-            }
-          fi
-          echo "Compilation finished at: $(date)"
-          echo "ccache stats:"
-          ccache -s || true
-
-      - name: Save ccache (always, even if compile failed)
-        uses: actions/cache/save@v4
-        if: always()
-        with:
-          path: /mnt/immortalwrt/ccache
-          key: ${{ runner.os }}-immortalwrt-${{ env.REPO_BRANCH }}-ccache-v2-${{ github.run_id }}
-
-      - name: Organize firmware files
-        id: organize
-        run: |
-          cd openwrt/bin/targets/*/*
-          rm -rf packages
-          echo "FIRMWARE_PATH=$PWD" >> $GITHUB_OUTPUT
-          echo "Generated firmware files:"
-          ls -lh
-
-      - name: Upload firmware to Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: ImmortalWrt-XG-040G-MD-$(date +%Y%m%d%H%M)
-          path: ${{ steps.organize.outputs.FIRMWARE_PATH }}
-          retention-days: 30
-
-      - name: Generate release info
-        id: tag
-        if: env.UPLOAD_RELEASE == 'true'
-        run: |
-          echo "release_tag=immortalwrt-xg-040g-md-$(date +%Y%m%d%H%M)" >> $GITHUB_OUTPUT
-          cat <<EOF > release.txt
-          ImmortalWrt for Nokia XG-040G-MD
-          ----------------------
-          设备型号: Nokia XG-040G-MD
-          编译时间: $(date +"%Y-%m-%d %H:%M")
-          内核版本: 6.18
-          源码: ImmortalWrt 官方 master 分支
-          EOF
-
-      - name: Publish to Release
-        uses: softprops/action-gh-release@v2
-        if: env.UPLOAD_RELEASE == 'true'
-        with:
-          tag_name: ${{ steps.tag.outputs.release_tag }}
-          name: ImmortalWrt for XG-040G-MD $(date +%Y.%m.%d)
-          body_path: release.txt
-          files: ${{ steps.organize.outputs.FIRMWARE_PATH }}/*
-
-      - name: Cleanup old workflow runs
-        uses: Mattraks/delete-workflow-runs@v2
-        with:
-          retain_days: 7
-          keep_minimum_runs: 5
-
-      - name: Cleanup old releases
-        if: env.UPLOAD_RELEASE == 'true'
-        run: |
-          # 删除旧Release，保留最新20个
-          gh release list --limit 100 | tail -n +$((KEEP_RELEASES + 1)) | awk '{print $1}' | xargs -r gh release delete -y
+    - name: Cleanup old workflow runs
+      uses: Mattraks/delete-workflow-runs@v2
+      with:
+        retain_days: 7
+        keep_minimum_runs: 10
