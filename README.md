@@ -1,0 +1,1 @@
+# ImmortalWrt-for-XG-040G-MD
