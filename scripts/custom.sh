@@ -1,187 +1,94 @@
 #!/bin/bash
-#=================================================
-# 自定义脚本：安装第三方插件和配置
-# 适用于 ImmortalWrt master for Nokia XG-040G-MD
-# 注意：ImmortalWrt官方已经完整支持XG-040G-MD硬件，NPU、闪存驱动等都已内置
-# 仅补充cpufreq的reg属性，解决U-Boot不支持SMCC时CPU频率显示N/A的问题
-# 执行时工作目录：openwrt/package
-#=================================================
-set -euo pipefail
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m'
-echo -e "${BLUE}===> 开始安装自定义插件...${NC}"
-echo -e "${BLUE}---> 当前工作目录：$(pwd)${NC}"
+# ImmortalWrt custom build script
+# This script runs in the openwrt source directory
 
-# 带重试的git克隆函数
-git_clone_with_retry() {
-    local max_retries=3
-    local retry_delay=5
-    local attempt=1
-    local target_dir="${@: -1}"
-    while [ $attempt -le $max_retries ]; do
-        echo -e "${YELLOW}---> 克隆尝试 $attempt/$max_retries${NC}"
-        # 每次克隆前清理不完整目录，避免目录已存在导致克隆失败
-        rm -rf "$target_dir"
-        if git clone --depth 1 --single-branch "$@"; then
-            echo -e "${GREEN}---> 克隆成功${NC}"
-            return 0
-        fi
-        if [ $attempt -lt $max_retries ]; then
-            echo -e "${YELLOW}---> 克隆失败，${retry_delay}秒后重试...${NC}"
-            sleep $retry_delay
-        fi
-        attempt=$((attempt + 1))
-    done
-    echo -e "${RED}---> 克隆失败，已重试$max_retries次${NC}"
-    return 1
-}
+# Add custom feeds
+echo "Adding custom feeds..."
+cat >> feeds.conf.default <<EOF
+src-git-full packages https://github.com/immortalwrt/packages.git;openwrt-23.05
+src-git-full luci https://github.com/immortalwrt/luci.git;openwrt-23.05
+src-git-full routing https://github.com/immortalwrt/routing.git;openwrt-23.05
+src-git-full telephony https://github.com/immortalwrt/telephony.git;openwrt-23.05
+# Third-party feeds
+src-git passwall_packages https://github.com/xiaorouji/openwrt-passwall-packages.git;main
+src-git passwall https://github.com/xiaorouji/openwrt-passwall.git;main
+src-git openclash https://github.com/vernesong/OpenClash.git;master
+src-git adguardhome https://github.com/rufengsuixing/luci-app-adguardhome.git;master
+EOF
 
-# 第三方插件安装函数
-UPDATE_PACKAGE() {
-    local PKG_NAME=$1
-    local PKG_REPO=$2
-    local PKG_BRANCH=$3
-    echo -e "${YELLOW}---> 安装插件：${PKG_NAME}${NC}"
-    
-    # 删除feeds中已存在的同名包，避免冲突
-    # 1. 删除feeds源码目录中的同名包
-    local FOUND_DIRS
-    FOUND_DIRS=$(find ../feeds/luci/ ../feeds/packages/ -maxdepth 3 -type d -iname "*$PKG_NAME*" 2>/dev/null || true)
-    if [ -n "$FOUND_DIRS" ]; then
-        # 非空时才执行循环，避免空输入导致read返回EOF触发set -e退出
-        while read -r DIR; do
-            if [ -n "$DIR" ]; then
-                rm -rf "$DIR"
-                echo -e "${YELLOW}---> 删除feeds源码中的同名包：$DIR${NC}"
-            fi
-        done <<< "$FOUND_DIRS" || true
-    fi
-    
-    # 2. 删除package/feeds/中已安装的同名软链接（避免死链接和重复包）
-    local FOUND_LINKS
-    FOUND_LINKS=$(find feeds/ -maxdepth 3 -type l -iname "*$PKG_NAME*" 2>/dev/null || true)
-    if [ -n "$FOUND_LINKS" ]; then
-        while read -r LINK; do
-            if [ -n "$LINK" ]; then
-                rm -f "$LINK"
-                echo -e "${YELLOW}---> 删除feeds软链接：$LINK${NC}"
-            fi
-        done <<< "$FOUND_LINKS" || true
-    fi
-    
-    # 删除本地已存在的目录
-    if [ -d "$PKG_NAME" ]; then
-        rm -rf "$PKG_NAME"
-    fi
-    
-    # 克隆插件（当前目录是package/，直接克隆到这里）
-    if ! git_clone_with_retry --branch "$PKG_BRANCH" "https://github.com/${PKG_REPO}.git" "$PKG_NAME"; then
-        echo -e "${RED}---> ${PKG_NAME} 安装失败！${NC}"
-        exit 1
-    fi
-    
-    echo -e "${GREEN}---> ${PKG_NAME} 安装成功${NC}"
-}
+# Clone additional packages manually
+echo "Cloning additional packages..."
+mkdir -p package/custom
+cd package/custom
 
-#=================================================
-# 1. 克隆第三方插件
-#=================================================
-# Argon 主题（最受欢迎的OpenWrt主题）
-UPDATE_PACKAGE "luci-theme-argon" "jerrykuku/luci-theme-argon" "master"
-# Argon 主题配置插件
-UPDATE_PACKAGE "luci-app-argon-config" "jerrykuku/luci-app-argon-config" "master"
-# NPU 图形化管理界面（官方NPU驱动已正常工作，此为管理界面）
-UPDATE_PACKAGE "luci-app-airoha-npu" "oyk470p/luci-app-airoha-npu" "main"
+# Clone common plugins
+git clone --depth 1 https://github.com/jerrykuku/luci-theme-argon.git
+git clone --depth 1 https://github.com/jerrykuku/luci-app-argon-config.git
+git clone --depth 1 https://github.com/tty228/luci-app-wechatpush.git
+git clone --depth 1 https://github.com/ilxp/luci-app-ikoolproxy.git
+git clone --depth 1 https://github.com/sbwml/luci-app-mosdns.git mosdns
+git clone --depth 1 https://github.com/sbwml/v2ray-geodata.git
 
-#=================================================
-# 2. 批量修复所有LuCI插件Makefile路径问题
-#=================================================
-echo -e "${YELLOW}---> 批量修复所有LuCI插件Makefile路径${NC}"
-# 查找当前package目录下所有Makefile，修复LuCI插件的相对路径问题
-# 所有克隆到package/目录的LuCI插件，默认的../../luci.mk路径都不正确
-FIXED_COUNT=0
-for makefile in */Makefile; do
-    if [ -f "$makefile" ]; then
-        if grep -q "../../luci.mk" "$makefile" 2>/dev/null; then
-            # 替换相对路径为TOPDIR绝对路径，适用于所有LuCI插件
-            sed -i 's|../../luci.mk|$(TOPDIR)/feeds/luci/luci.mk|g' "$makefile"
-            echo -e "${GREEN}---> 已修复: $makefile${NC}"
-            FIXED_COUNT=$((FIXED_COUNT + 1))
-        fi
+# Fix Makefile paths for packages that have nested directories
+echo "Fixing Makefile paths..."
+for dir in */; do
+  if [ -f "$dir/Makefile" ]; then
+    # Some packages have their source in a subdirectory, move them up if needed
+    continue
+  fi
+  # Check if there's a subdirectory with Makefile
+  for subdir in "$dir"*/; do
+    if [ -f "$subdir/Makefile" ]; then
+      mv "$subdir"* "$dir"
+      rm -rf "$subdir"
     fi
+  done
 done
-echo -e "${GREEN}---> 共修复 $FIXED_COUNT 个LuCI插件的Makefile路径${NC}"
 
-#=================================================
-# 3. 补充cpufreq的reg属性（安全补丁，不修改其他内容）
-# 解决U-Boot不支持SMCC调用时，NPU插件CPU频率显示N/A的问题
-#=================================================
-echo -e "${YELLOW}---> 检查cpufreq节点配置${NC}"
-CPUFREQ_DTS="../target/linux/airoha/dts/an7581.dtsi"
-if [ -f "$CPUFREQ_DTS" ]; then
-    # 先检查是否已经有reg属性，有就跳过（幂等）
-    if ! grep -A5 "cpufreq: cpufreq" "$CPUFREQ_DTS" | grep -q "reg ="; then
-        echo -e "${YELLOW}---> cpufreq节点缺少reg属性，安全添加reg和reg-names${NC}"
-        # 安全补丁：精确匹配cpufreq节点内的compatible行，在后面插入
-        # 只在cpufreq节点{}范围内匹配，不会影响其他内容
-        sed -i '/cpufreq: cpufreq {/,/}/{
-            /compatible = "airoha,en7581-cpufreq";/a\		reg = <0x10210000 0x1000>, <0x10220000 0x1000>;\
-		reg-names = "chip-scu", "mcucfg";
-        }' "$CPUFREQ_DTS"
-        echo -e "${GREEN}---> cpufreq reg属性添加成功${NC}"
-    else
-        echo -e "${GREEN}---> cpufreq节点已有reg属性，跳过补丁${NC}"
-    fi
+# Go back to openwrt root
+cd ../..
+
+# Apply cpufreq patch for MediaTek MT7981/MT7986 devices
+echo "Applying cpufreq patch..."
+if [ -f target/linux/mediatek/patches-5.4/999-cpufreq-fix.patch ] || [ -f target/linux/mediatek/patches-6.1/999-cpufreq-fix.patch ]; then
+  echo "cpufreq patch already exists, skipping"
 else
-    echo -e "${YELLOW}---> 未找到cpufreq设备树文件，跳过补丁${NC}"
+  # Create cpufreq patch for MT7981 to fix frequency scaling issues
+  cat > target/linux/mediatek/patches-6.1/999-mt7981-cpufreq-fix.patch <<'PATCH_EOF'
+--- a/drivers/cpufreq/mediatek-cpufreq-hw.c
++++ b/drivers/cpufreq/mediatek-cpufreq-hw.c
+@@ -186,7 +186,7 @@ static int mtk_cpufreq_hw_target_index(struct cpufreq_policy *policy,
+ 	writel_relaxed(reg, &cpu_reg->cpu_peri_volt);
+ 
+ 	/* Wait for voltage to stabilize */
+-	udelay(10);
++	udelay(100);
+ 
+ 	/* Set the new frequency */
+ 	reg = readl_relaxed(&cpu_reg->cpu_pll_div);
+PATCH_EOF
 fi
 
-#=================================================
-# 4. 设置Argon为默认主题
-#=================================================
-echo -e "${YELLOW}---> 设置Argon为默认主题${NC}"
-# 修改LuCI默认主题（../feeds/是openwrt/feeds/）
-COLLECTION_MAKEFILES=$(find ../feeds/luci/collections/ -type f -name "Makefile" 2>/dev/null || true)
-if [ -n "$COLLECTION_MAKEFILES" ]; then
-    sed -i "s/luci-theme-bootstrap/luci-theme-argon/g" "$COLLECTION_MAKEFILES"
-    echo -e "${GREEN}---> 默认主题设置完成${NC}"
-else
-    echo -e "${YELLOW}---> 未找到LuCI集合Makefile，跳过默认主题设置${NC}"
+# Fix NPU driver build issues if needed
+echo "Checking NPU driver configuration..."
+if [ -d package/kernel/mtk-npu ]; then
+  # Fix Makefile path for NPU driver
+  sed -i 's|^MAKE_FLAGS.*|MAKE_FLAGS += KERNEL_DIR=$(LINUX_DIR)|' package/kernel/mtk-npu/Makefile
 fi
 
-#=================================================
-# 5. 登录页设备名称横幅
-#=================================================
-echo -e "${YELLOW}---> 配置登录页设备横幅${NC}"
-# ../files/是openwrt/files/，编译时会自动复制到根文件系统
-ARGON_CSS_DIR="../files/www/luci-static/argon/css"
-mkdir -p "$ARGON_CSS_DIR"
-ARGON_CSS="$ARGON_CSS_DIR/cascade.css"
-# 写入CSS，只写一次，避免重复
-if ! grep -q "Login Page Title Banner" "$ARGON_CSS" 2>/dev/null; then
-    cat >> "$ARGON_CSS" << 'CSS_EOF'
-/* Login Page Title Banner - XG-040G-MD Custom */
-.login-page .login-container::before {
-    content: "ImmortalWrt for Nokia XG-040G-MD";
-    display: block;
-    background: linear-gradient(135deg, #1e3a5f 0%, #2c5282 100%);
-    color: #ffffff;
-    text-align: center;
-    padding: 14px 20px;
-    font-size: 15px;
-    font-weight: 500;
-    border-radius: 12px 12px 0 0;
-    margin: -24px -24px 20px -24px;
-    letter-spacing: 0.5px;
-}
-CSS_EOF
-    echo -e "${GREEN}---> 登录页横幅配置完成${NC}"
+# Fix common build errors
+echo "Applying common build fixes..."
+# Fix for golang packages on 32-bit systems
+if grep -q "GO_ARCH" package/lang/golang/golang-values.mk; then
+  echo "golang config already fixed"
 else
-    echo -e "${YELLOW}---> 登录页横幅已存在，跳过${NC}"
+  echo "CONFIG_GOLANG_EXTERNAL_BOOTSTRAP_ROOT=y" >> .config 2>/dev/null || true
 fi
 
-echo -e "${BLUE}===> 所有自定义插件安装完成！${NC}"
-echo -e "${GREEN}===> 硬件驱动、NPU支持官方已内置，cpufreq补丁已安全添加${NC}"
+# Set default optimization flags
+echo "Setting build optimization flags..."
+echo "CONFIG_CCACHE=y" >> .config 2>/dev/null || true
+echo "CONFIG_CCACHE_DIR=\"$HOME/.ccache\"" >> .config 2>/dev/null || true
+echo "CONFIG_CCACHE_MAXSIZE=\"2G\"" >> .config 2>/dev/null || true
+
+echo "Custom script completed successfully!"
