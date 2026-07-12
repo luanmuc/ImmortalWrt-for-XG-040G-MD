@@ -105,7 +105,8 @@ jobs:
         run: |
           cd openwrt
           echo "创建大目录软链接到/mnt分区，防止根分区空间不足..."
-          mkdir -p /mnt/openwrt-cache/{build_dir,staging_dir}
+          sudo mkdir -p /mnt/openwrt-cache/{build_dir,staging_dir}
+          sudo chown -R $USER:$USER /mnt/openwrt-cache
           # 删除原有空目录（如果存在）
           rm -rf build_dir staging_dir
           # 创建软链接，编译中间目录指向/mnt分区（不缓存）
