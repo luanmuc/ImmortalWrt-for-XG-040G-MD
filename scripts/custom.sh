@@ -20,8 +20,11 @@ git_clone_with_retry() {
     local max_retries=3
     local retry_delay=5
     local attempt=1
+    local target_dir="${@: -1}"
     while [ $attempt -le $max_retries ]; do
         echo -e "${YELLOW}---> 克隆尝试 $attempt/$max_retries${NC}"
+        # 每次克隆前清理不完整目录，避免目录已存在导致克隆失败
+        rm -rf "$target_dir"
         if git clone --depth 1 --single-branch "$@"; then
             echo -e "${GREEN}---> 克隆成功${NC}"
             return 0
@@ -137,19 +140,6 @@ echo -e "${YELLOW}---> 配置登录页设备横幅${NC}"
 ARGON_CSS_DIR="../files/www/luci-static/argon/css"
 mkdir -p "$ARGON_CSS_DIR"
 ARGON_CSS="$ARGON_CSS_DIR/cascade.css"
-# 版本检测，正确识别ImmortalWrt
-if [ -f ../etc/openwrt_release ]; then
-    if grep -q "ImmortalWrt" ../etc/openwrt_release; then
-        VERSION_TITLE="ImmortalWrt for Nokia XG-040G-MD"
-    elif grep -q "OpenWrt" ../etc/openwrt_release; then
-        VERSION_TITLE="OpenWrt for Nokia XG-040G-MD"
-    else
-        VERSION_TITLE="Nokia XG-040G-MD"
-    fi
-else
-    VERSION_TITLE="Nokia XG-040G-MD"
-fi
-ESCAPED_TITLE=$(echo "$VERSION_TITLE" | sed 's/"/\\"/g')
 # 写入CSS，只写一次，避免重复
 if ! grep -q "Login Page Title Banner" "$ARGON_CSS" 2>/dev/null; then
     cat >> "$ARGON_CSS" << 'CSS_EOF'
