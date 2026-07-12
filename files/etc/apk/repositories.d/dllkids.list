@@ -1,1 +1,5 @@
-https://down.dllkids.xyz/openwrt-feed/25.12/aarch64_cortex-a53/packages.adb
+src/gz immortalwrt_core https://downloads.immortalwrt.org/snapshots/packages/aarch64_cortex-a53/base
+src/gz immortalwrt_luci https://downloads.immortalwrt.org/snapshots/packages/aarch64_cortex-a53/luci
+src/gz immortalwrt_packages https://downloads.immortalwrt.org/snapshots/packages/aarch64_cortex-a53/packages
+src/gz immortalwrt_routing https://downloads.immortalwrt.org/snapshots/packages/aarch64_cortex-a53/routing
+src/gz immortalwrt_telephony https://downloads.immortalwrt.org/snapshots/packages/aarch64_cortex-a53/telephony
