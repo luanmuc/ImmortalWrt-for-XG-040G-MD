@@ -33,6 +33,13 @@ for i in 1 2 3; do
   sleep 5
 done
 
+echo ">>> Cloning AdGuard Home plugin (3 retries)"
+for i in 1 2 3; do
+  rm -rf luci-app-adguardhome
+  git clone --depth 1 --single-branch --branch master https://github.com/w9315273/luci-app-adguardhome.git && break
+  sleep 5
+done
+
 echo ">>> Back to source root"
 cd ../..
 
@@ -46,7 +53,9 @@ DTS_FILE="target/linux/airoha/dts/airoha-an7581-nokia-xg-040g-md.dts"
 if [ -f "$DTS_FILE" ]; then
   # Check if patch already applied (idempotent)
   if ! grep -q "reg = <0x10210000 0x1000>;" "$DTS_FILE"; then
-    sed -i '/compatible = "airoha,en7581-cpufreq";/a \	reg = <0x10210000 0x1000>;\n	reg-names = "cpufreq";' "$DTS_FILE"
+    # Use two separate sed commands for better compatibility, order matters
+    sed -i '/compatible = "airoha,en7581-cpufreq";/a \	reg-names = "cpufreq";' "$DTS_FILE"
+    sed -i '/compatible = "airoha,en7581-cpufreq";/a \	reg = <0x10210000 0x1000>;' "$DTS_FILE"
     echo "cpufreq DTS patch applied successfully"
   else
     echo "cpufreq DTS patch already applied, skipping"
