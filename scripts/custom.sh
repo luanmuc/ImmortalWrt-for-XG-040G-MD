@@ -1,94 +1,72 @@
-#!/bin/bash
-# ImmortalWrt custom build script
-# This script runs in the openwrt source directory
+#!/bin/sh
+# ImmortalWrt custom build script for Nokia XG-040G-MD
+# Runs in openwrt source root directory
 
-# Add custom feeds
-echo "Adding custom feeds..."
-cat >> feeds.conf.default <<EOF
-src-git-full packages https://github.com/immortalwrt/packages.git;openwrt-23.05
-src-git-full luci https://github.com/immortalwrt/luci.git;openwrt-23.05
-src-git-full routing https://github.com/immortalwrt/routing.git;openwrt-23.05
-src-git-full telephony https://github.com/immortalwrt/telephony.git;openwrt-23.05
-# Third-party feeds
-src-git passwall_packages https://github.com/xiaorouji/openwrt-passwall-packages.git;main
-src-git passwall https://github.com/xiaorouji/openwrt-passwall.git;main
-src-git openclash https://github.com/vernesong/OpenClash.git;master
-src-git adguardhome https://github.com/rufengsuixing/luci-app-adguardhome.git;master
-EOF
-
-# Clone additional packages manually
-echo "Cloning additional packages..."
+echo ">>> Preparing custom packages directory"
 mkdir -p package/custom
 cd package/custom
 
-# Clone common plugins
-git clone --depth 1 https://github.com/jerrykuku/luci-theme-argon.git
-git clone --depth 1 https://github.com/jerrykuku/luci-app-argon-config.git
-git clone --depth 1 https://github.com/tty228/luci-app-wechatpush.git
-git clone --depth 1 https://github.com/ilxp/luci-app-ikoolproxy.git
-git clone --depth 1 https://github.com/sbwml/luci-app-mosdns.git mosdns
-git clone --depth 1 https://github.com/sbwml/v2ray-geodata.git
+echo ">>> Removing duplicate packages from feeds"
+# Remove duplicate packages from all feeds directories
+find ../../feeds/luci/ ../../feeds/packages/ -maxdepth 3 -type d -iname "*luci-theme-argon*" -exec rm -rf {} + 2>/dev/null
+find ../../feeds/luci/ ../../feeds/packages/ -maxdepth 3 -type d -iname "*luci-app-argon-config*" -exec rm -rf {} + 2>/dev/null
+find ../../feeds/luci/ ../../feeds/packages/ -maxdepth 3 -type d -iname "*luci-app-airoha-npu*" -exec rm -rf {} + 2>/dev/null
 
-# Fix Makefile paths for packages that have nested directories
-echo "Fixing Makefile paths..."
-for dir in */; do
-  if [ -f "$dir/Makefile" ]; then
-    # Some packages have their source in a subdirectory, move them up if needed
-    continue
-  fi
-  # Check if there's a subdirectory with Makefile
-  for subdir in "$dir"*/; do
-    if [ -f "$subdir/Makefile" ]; then
-      mv "$subdir"* "$dir"
-      rm -rf "$subdir"
-    fi
-  done
+echo ">>> Cloning Argon theme (3 retries)"
+for i in 1 2 3; do
+  rm -rf luci-theme-argon
+  git clone --depth 1 --single-branch --branch master https://github.com/jerrykuku/luci-theme-argon.git && break
+  sleep 5
 done
 
-# Go back to openwrt root
+echo ">>> Cloning Argon config (3 retries)"
+for i in 1 2 3; do
+  rm -rf luci-app-argon-config
+  git clone --depth 1 --single-branch --branch master https://github.com/jerrykuku/luci-app-argon-config.git && break
+  sleep 5
+done
+
+echo ">>> Cloning Airoha NPU plugin (3 retries)"
+for i in 1 2 3; do
+  rm -rf luci-app-airoha-npu
+  git clone --depth 1 --single-branch --branch main https://github.com/oyk470p/luci-app-airoha-npu.git && break
+  sleep 5
+done
+
+echo ">>> Back to source root"
 cd ../..
 
-# Apply cpufreq patch for MediaTek MT7981/MT7986 devices
-echo "Applying cpufreq patch..."
-if [ -f target/linux/mediatek/patches-5.4/999-cpufreq-fix.patch ] || [ -f target/linux/mediatek/patches-6.1/999-cpufreq-fix.patch ]; then
-  echo "cpufreq patch already exists, skipping"
+echo ">>> Fixing LuCI Makefile paths"
+# Fix relative luci.mk includes in all custom packages
+find package -name "Makefile" | xargs sed -i 's|include \.\./\.\./luci\.mk|include $(TOPDIR)/feeds/luci/luci.mk|g'
+find package -name "Makefile" | xargs sed -i 's|include \.\./\.\./\.\./luci\.mk|include $(TOPDIR)/feeds/luci/luci.mk|g'
+
+echo ">>> Applying cpufreq DTS patch for Airoha AN7581"
+DTS_FILE="target/linux/airoha/dts/airoha-an7581-nokia-xg-040g-md.dts"
+if [ -f "$DTS_FILE" ]; then
+  # Check if patch already applied (idempotent)
+  if ! grep -q "reg = <0x10210000 0x1000>;" "$DTS_FILE"; then
+    sed -i '/compatible = "airoha,en7581-cpufreq";/a \	reg = <0x10210000 0x1000>;\n	reg-names = "cpufreq";' "$DTS_FILE"
+    echo "cpufreq DTS patch applied successfully"
+  else
+    echo "cpufreq DTS patch already applied, skipping"
+  fi
 else
-  # Create cpufreq patch for MT7981 to fix frequency scaling issues
-  cat > target/linux/mediatek/patches-6.1/999-mt7981-cpufreq-fix.patch <<'PATCH_EOF'
---- a/drivers/cpufreq/mediatek-cpufreq-hw.c
-+++ b/drivers/cpufreq/mediatek-cpufreq-hw.c
-@@ -186,7 +186,7 @@ static int mtk_cpufreq_hw_target_index(struct cpufreq_policy *policy,
- 	writel_relaxed(reg, &cpu_reg->cpu_peri_volt);
- 
- 	/* Wait for voltage to stabilize */
--	udelay(10);
-+	udelay(100);
- 
- 	/* Set the new frequency */
- 	reg = readl_relaxed(&cpu_reg->cpu_pll_div);
-PATCH_EOF
+  echo "Info: DTS file not found, cpufreq patch skipped (already supported in newer versions)"
 fi
 
-# Fix NPU driver build issues if needed
-echo "Checking NPU driver configuration..."
-if [ -d package/kernel/mtk-npu ]; then
-  # Fix Makefile path for NPU driver
-  sed -i 's|^MAKE_FLAGS.*|MAKE_FLAGS += KERNEL_DIR=$(LINUX_DIR)|' package/kernel/mtk-npu/Makefile
-fi
-
-# Fix common build errors
-echo "Applying common build fixes..."
-# Fix for golang packages on 32-bit systems
-if grep -q "GO_ARCH" package/lang/golang/golang-values.mk; then
-  echo "golang config already fixed"
+echo ">>> Setting default LuCI theme to Argon"
+# Official standard method: modify LuCI collection Makefile to set default theme
+COLLECTION_MAKEFILE=$(find feeds/luci/collections/ -type f -name "Makefile" | head -1)
+if [ -n "$COLLECTION_MAKEFILE" ]; then
+  sed -i "s/luci-theme-bootstrap/luci-theme-argon/g" "$COLLECTION_MAKEFILE"
+  echo "Default theme set to Argon successfully"
 else
-  echo "CONFIG_GOLANG_EXTERNAL_BOOTSTRAP_ROOT=y" >> .config 2>/dev/null || true
+  echo "Warning: LuCI collection Makefile not found, falling back to .config setting"
+  sed -i 's/CONFIG_PACKAGE_luci-theme-bootstrap=y/# CONFIG_PACKAGE_luci-theme-bootstrap is not set/g' .config
+  if ! grep -q "CONFIG_PACKAGE_luci-theme-argon=y" .config; then
+    echo "CONFIG_PACKAGE_luci-theme-argon=y" >> .config
+  fi
 fi
 
-# Set default optimization flags
-echo "Setting build optimization flags..."
-echo "CONFIG_CCACHE=y" >> .config 2>/dev/null || true
-echo "CONFIG_CCACHE_DIR=\"$HOME/.ccache\"" >> .config 2>/dev/null || true
-echo "CONFIG_CCACHE_MAXSIZE=\"2G\"" >> .config 2>/dev/null || true
-
-echo "Custom script completed successfully!"
+echo ">>> Custom script completed successfully"
