@@ -26,7 +26,6 @@ jobs:
     steps:
     - name: Checkout
       uses: actions/checkout@main
-
     - name: Free up disk space
       uses: jlumbroso/free-disk-space@main
       with:
@@ -37,17 +36,16 @@ jobs:
         large-packages: true
         docker-images: true
         swap-storage: true
-
     - name: Check disk space
       run: df -h
-
     - name: Create 4G swap
       run: |
+        sudo swapoff /swapfile 2>/dev/null
+        sudo rm -f /swapfile
         sudo fallocate -l 4G /swapfile
         sudo chmod 600 /swapfile
         sudo mkswap /swapfile
         sudo swapon /swapfile
-
     - name: Install build dependencies
       env:
         DEBIAN_FRONTEND: noninteractive
@@ -59,23 +57,20 @@ jobs:
           libfdt-dev libgmp3-dev libmpc-dev libmpfr-dev
         sudo apt-get clean
         sudo timedatectl set-timezone "$TZ"
-
     - name: Clone ImmortalWrt source
       run: |
         git clone --branch "$REPO_BRANCH" "$REPO_URL" openwrt
         echo "OPENWRT_PATH=$PWD/openwrt" >> $GITHUB_ENV
-
     - name: Move large directories to /mnt
       run: |
         sudo mkdir -p /mnt/immortalwrt/{dl,staging_dir,build_dir,ccache}
         sudo chown -R "$USER:$(id -gn)" /mnt/immortalwrt
         cd "$OPENWRT_PATH"
-        rm -rf dl staging_dir build_dir
+        rm -rf dl staging_dir build_dir ccache
         ln -sfn /mnt/immortalwrt/dl dl
         ln -sfn /mnt/immortalwrt/staging_dir staging_dir
         ln -sfn /mnt/immortalwrt/build_dir build_dir
         ln -sfn /mnt/immortalwrt/ccache ccache
-
     - name: Cache dl directory
       uses: actions/cache@v3
       with:
@@ -83,7 +78,6 @@ jobs:
         key: ${{ runner.os }}-immortalwrt-${{ env.REPO_BRANCH }}-dl
         restore-keys: |
           ${{ runner.os }}-immortalwrt-${{ env.REPO_BRANCH }}-dl-
-
     - name: Cache ccache directory
       uses: actions/cache@v3
       with:
@@ -91,19 +85,16 @@ jobs:
         key: ${{ runner.os }}-immortalwrt-${{ env.REPO_BRANCH }}-ccache
         restore-keys: |
           ${{ runner.os }}-immortalwrt-${{ env.REPO_BRANCH }}-ccache-
-
     - name: Setup ccache
       run: |
         mkdir -p "$CCACHE_DIR"
         ccache -M "$CCACHE_MAXSIZE"
         ccache -s
-
     - name: Copy custom files
       run: |
         [ -e "$FEEDS_CONF" ] && cp -f "$FEEDS_CONF" "$OPENWRT_PATH/feeds.conf.default"
         [ -e files ] && cp -af files "$OPENWRT_PATH/"
         [ -e "$CONFIG_FILE" ] && cp -f "$CONFIG_FILE" "$OPENWRT_PATH/.config"
-
     - name: Update feeds
       working-directory: ${{ env.OPENWRT_PATH }}
       run: |
@@ -112,18 +103,15 @@ jobs:
           sleep 10
         done
         ./scripts/feeds install -a -f
-
     - name: Run custom script
       run: |
         chmod +x "$GITHUB_WORKSPACE/$CUSTOM_SCRIPT"
         cd "$OPENWRT_PATH"
         "$GITHUB_WORKSPACE/$CUSTOM_SCRIPT"
-
     - name: Generate default config
       working-directory: ${{ env.OPENWRT_PATH }}
       run: |
         make defconfig
-
     - name: Download packages
       working-directory: ${{ env.OPENWRT_PATH }}
       run: |
@@ -132,7 +120,6 @@ jobs:
           sleep 10
         done
         find dl -size -1024c -delete
-
     - name: Compile firmware
       working-directory: ${{ env.OPENWRT_PATH }}
       run: |
@@ -146,7 +133,6 @@ jobs:
         }
         echo "ccache stats after compile:"
         ccache -s || true
-
     - name: Organize firmware files
       id: organize
       run: |
@@ -157,18 +143,15 @@ jobs:
         echo "FIRMWARE_PATH=$PWD" >> $GITHUB_ENV
         echo "tag_name=$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
         echo "file_date=$(date +"%Y.%m.%d")" >> $GITHUB_OUTPUT
-
     - name: Upload firmware artifacts
       uses: actions/upload-artifact@main
       with:
         name: ImmortalWrt-XG-040G-MD-${{ steps.organize.outputs.file_date }}
         path: ${{ env.FIRMWARE_PATH }}
-
     - name: Cleanup old releases
       if: env.UPLOAD_RELEASE == 'true' && !cancelled()
       run: |
         gh release list --limit 10 | awk '{print $1}' | xargs -I {} gh release delete {} -y || true
-
     - name: Generate release notes
       if: env.UPLOAD_RELEASE == 'true' && !cancelled()
       run: |
@@ -183,7 +166,6 @@ Default IP: 192.168.1.1
 Default user: root
 Default password: password
 EOF
-
     - name: Publish to Release
       uses: softprops/action-gh-release@master
       if: env.UPLOAD_RELEASE == 'true' && !cancelled()
