@@ -30,7 +30,7 @@ env:
   KEEP_RELEASES: 20
   KEEP_RELEASE_MARKER: "[keep-release]"
   CCACHE_DIR: /mnt/immortalwrt/ccache
-  CCACHE_MAXSIZE: 5G
+  CCACHE_MAXSIZE: 8G
   TZ: Asia/Shanghai
 jobs:
   build:
@@ -123,7 +123,7 @@ jobs:
           
           # 集成 Airoha NPU 状态插件（原作者方式）
           cd package
-          git clone --depth 1 https://github.com/oyk470p/luci-app-airoha-npu.git
+          git clone --depth 1 https://github.com/luanmuc/luci-app-airoha-npu.git
           sed -i 's|include ../../luci.mk|include $(TOPDIR)/feeds/luci/luci.mk|' ./luci-app-airoha-npu/Makefile
           cd ..
           
